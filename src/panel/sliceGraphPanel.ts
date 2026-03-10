@@ -9,7 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execFile } from 'child_process';
 import * as vscode from 'vscode';
-import type { WebviewMessage, ExtensionMessage, SliceInfo, EdgeInfo } from '../types.js';
+import type { WebviewMessage, ExtensionMessage, SliceInfo, EdgeInfo, AppInfo } from '../types.js';
 
 /** Shape of the parsed model.json (subset we care about). */
 interface ModelJson {
@@ -161,6 +161,7 @@ export class SliceGraphPanel {
 			type: s.type ?? (s.path.includes('setup') ? 'setup' as const : 'feature' as const),
 			parent: s.parent ?? null,
 			subsliceCount: s.subslices?.length ?? 0,
+			app: s.path.split('/')[0] ?? 'unknown',
 		}));
 
 		const edges: EdgeInfo[] = model.edges.map((e) => ({
@@ -169,7 +170,23 @@ export class SliceGraphPanel {
 			count: e.count,
 		}));
 
-		this.send({ type: 'modelData', slices, edges });
+		// Derive app-level metadata from slices
+		const appMap = new Map<string, number>();
+		for (const s of slices) {
+			appMap.set(s.app, (appMap.get(s.app) ?? 0) + 1);
+		}
+
+		const API_STACK = ['NestJS', 'Prisma'];
+		const FRONTEND_STACK = ['Nuxt', 'Vue', 'Pinia', 'Tailwind'];
+
+		const apps: AppInfo[] = [...appMap.entries()].map(([name, sliceCount]) => ({
+			name,
+			sliceCount,
+			techStack: name === 'api' ? API_STACK : FRONTEND_STACK,
+			...(name === 'api' ? { swaggerUrl: '/api/docs' } : {}),
+		}));
+
+		this.send({ type: 'modelData', apps, slices, edges });
 	}
 
 	/** Read and parse .cleanslice/model.json, or return null. */

@@ -5,35 +5,53 @@ import { Background } from '@vue-flow/background'
 import type { Node, Edge } from '@vue-flow/core'
 import { Plus, Minus, Maximize, Lock, Unlock, RefreshCw } from 'lucide-vue-next'
 import NodeProvider from '../node/Provider.vue'
+import HubProvider from '../node/HubProvider.vue'
 import { vscode } from '../../vscode'
-
-interface SliceInfo {
-  name: string
-  path: string
-  fileCount: number
-  type: 'setup' | 'feature'
-  parent: string | null
-  subsliceCount: number
-}
-
-interface EdgeInfo {
-  from: string
-  to: string
-  count: number
-}
+import { useGraphLayout } from './useGraphLayout'
+import type { AppInfo, SliceInfo, EdgeInfo } from './types'
 
 const nodeTypes = {
   slice: markRaw(NodeProvider),
+  hub: markRaw(HubProvider),
 }
 
 const nodes = ref<Node[]>([])
 const edges = ref<Edge[]>([])
 const refreshing = ref(false)
 
-const { onNodeClick, fitView, zoomIn, zoomOut, nodesDraggable } = useVueFlow()
+const { onNodeClick, onNodeDragStart, onNodeDrag, fitView, zoomIn, zoomOut, nodesDraggable, findNode } = useVueFlow()
+const { layout } = useGraphLayout()
+
+// Hub-to-slice membership for group dragging
+const hubSlices = new Map<string, string[]>()
+let dragPrev: { x: number; y: number } | null = null
 
 onNodeClick(({ node }) => {
   vscode.postMessage({ type: 'nodeSelected', slice: node.id })
+})
+
+onNodeDragStart(({ node }) => {
+  if (node.type === 'hub') {
+    dragPrev = { x: node.position.x, y: node.position.y }
+  } else {
+    dragPrev = null
+  }
+})
+
+onNodeDrag(({ node }) => {
+  if (node.type !== 'hub' || !dragPrev) return
+
+  const dx = node.position.x - dragPrev.x
+  const dy = node.position.y - dragPrev.y
+  dragPrev = { x: node.position.x, y: node.position.y }
+
+  const sliceIds = hubSlices.get(node.id) ?? []
+  for (const id of sliceIds) {
+    const n = findNode(id)
+    if (n) {
+      n.position = { x: n.position.x + dx, y: n.position.y + dy }
+    }
+  }
 })
 
 function refresh() {
@@ -41,104 +59,27 @@ function refresh() {
   vscode.postMessage({ type: 'refresh' })
 }
 
-function applyModelData(slices: SliceInfo[], modelEdges: EdgeInfo[]) {
-  // Count dependencies per slice
-  const depsOut = new Map<string, number>()
-  const depsIn = new Map<string, number>()
-  for (const e of modelEdges) {
-    depsOut.set(e.from, (depsOut.get(e.from) ?? 0) + 1)
-    depsIn.set(e.to, (depsIn.get(e.to) ?? 0) + 1)
-  }
+function applyModelData(apps: AppInfo[], slices: SliceInfo[], modelEdges: EdgeInfo[]) {
+  const result = layout(apps, slices, modelEdges)
+  nodes.value = result.nodes
+  edges.value = result.edges
 
-  // Separate top-level slices from subslices
-  const topLevel = slices.filter(s => s.parent === null)
-  const subsByParent = new Map<string, SliceInfo[]>()
-  for (const s of slices) {
-    if (s.parent !== null) {
-      const list = subsByParent.get(s.parent) ?? []
-      list.push(s)
-      subsByParent.set(s.parent, list)
+  // Build hub → slice membership for group dragging (includes subslices)
+  hubSlices.clear()
+  for (const n of result.nodes) {
+    if (n.type !== 'hub') continue
+    const directIds = result.edges
+      .filter(e => e.source === n.id && e.id?.startsWith('spoke:'))
+      .map(e => e.target!)
+    const allIds = new Set(directIds)
+    // Add subslices of direct children
+    for (const e of result.edges) {
+      if (e.id?.startsWith('sub:') && allIds.has(e.source!)) {
+        allIds.add(e.target!)
+      }
     }
+    hubSlices.set(n.id, [...allIds])
   }
-
-  const setupSlices = topLevel.filter(s => s.type === 'setup')
-  const featureSlices = topLevel.filter(s => s.type === 'feature')
-
-  const COL_GAP = 320
-  const ROW_GAP = 120
-  const SUB_X_OFFSET = 230
-  const SUB_ROW_GAP = 90
-  const START_X = 50
-  const START_Y = 50
-
-  const newNodes: Node[] = []
-  const newEdges: Edge[] = []
-
-  function buildNode(s: SliceInfo, x: number, y: number, isSubslice = false) {
-    newNodes.push({
-      id: s.name,
-      type: 'slice',
-      position: { x, y },
-      data: {
-        label: s.name,
-        type: s.type,
-        fileCount: s.fileCount,
-        subsliceCount: s.subsliceCount,
-        isSubslice,
-        depsIn: depsIn.get(s.name) ?? 0,
-        depsOut: depsOut.get(s.name) ?? 0,
-      },
-    })
-  }
-
-  /** Place a top-level slice and its subslices. Returns the total vertical space consumed. */
-  function placeSliceWithSubs(s: SliceInfo, x: number, y: number): number {
-    buildNode(s, x, y)
-    const subs = subsByParent.get(s.name) ?? []
-
-    for (let i = 0; i < subs.length; i++) {
-      const subY = y + (i + 1) * SUB_ROW_GAP
-      buildNode(subs[i], x + SUB_X_OFFSET, subY, true)
-
-      // Parent → subslice edge
-      newEdges.push({
-        id: `sub:${s.name}-${subs[i].name}`,
-        source: s.name,
-        target: subs[i].name,
-        type: 'smoothstep',
-        animated: false,
-        style: { strokeDasharray: '6 3', strokeWidth: 1.5, stroke: 'var(--color-muted-foreground)' },
-      })
-    }
-
-    // Vertical space: parent row + subslice rows
-    const subHeight = subs.length * SUB_ROW_GAP
-    return Math.max(ROW_GAP, subHeight + ROW_GAP)
-  }
-
-  let setupY = START_Y
-  for (const s of setupSlices) {
-    setupY += placeSliceWithSubs(s, START_X, setupY)
-  }
-
-  let featureY = START_Y
-  for (const s of featureSlices) {
-    featureY += placeSliceWithSubs(s, START_X + COL_GAP, featureY)
-  }
-
-  // Dependency edges
-  for (const e of modelEdges) {
-    newEdges.push({
-      id: `dep:${e.from}-${e.to}`,
-      source: e.from,
-      target: e.to,
-      animated: e.count >= 3,
-      label: String(e.count),
-    })
-  }
-
-  nodes.value = newNodes
-  edges.value = newEdges
 
   setTimeout(() => fitView({ padding: 0.2 }), 50)
 }
@@ -146,11 +87,15 @@ function applyModelData(slices: SliceInfo[], modelEdges: EdgeInfo[]) {
 function onMessage(event: MessageEvent) {
   if (event.data.type === 'modelData') {
     refreshing.value = false
-    applyModelData(event.data.slices, event.data.edges)
+    applyModelData(event.data.apps, event.data.slices, event.data.edges)
   }
 }
 
-onMounted(() => window.addEventListener('message', onMessage))
+onMounted(() => {
+  window.addEventListener('message', onMessage)
+  // Request data — the initial modelData may have been sent before this component mounted
+  vscode.postMessage({ type: 'refresh' })
+})
 onUnmounted(() => window.removeEventListener('message', onMessage))
 </script>
 
@@ -161,6 +106,8 @@ onUnmounted(() => window.removeEventListener('message', onMessage))
       :edges="edges"
       :node-types="(nodeTypes as any)"
       :default-edge-options="{ type: 'smoothstep' }"
+      :min-zoom="0.05"
+      :max-zoom="4"
       fit-view-on-init
       class="vue-flow"
     >
