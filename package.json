@@ -1,0 +1,79 @@
+{
+  "name": "cleanslice-studio",
+  "displayName": "CleanSlice Studio",
+  "description": "Visual slice-based application builder for Clean Architecture projects",
+  "version": "0.0.1",
+  "publisher": "cleanslice",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cleanslice-studio.openGraph",
+        "title": "CleanSlice Studio: Open Graph",
+        "icon": {
+          "light": "media/icon-light.svg",
+          "dark": "media/icon-dark.svg"
+        }
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "cleanslice-studio.openGraph",
+          "group": "navigation"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cleanslice-studio-sidebar",
+          "title": "CleanSlice Studio",
+          "icon": "media/icon-dark.svg"
+        }
+      ]
+    },
+    "views": {
+      "cleanslice-studio-sidebar": [
+        {
+          "id": "cleanslice-studio.sliceFiles",
+          "name": "Slice Files"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "cleanslice-studio.sliceFiles",
+        "contents": "No slice selected.\n\nOpen the graph to browse your slices.\n[Open Graph](command:cleanslice-studio.openGraph)"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "build:webview": "cd graph && npm run build",
+    "watch:webview": "cd graph && npx vite build --watch",
+    "compile": "npm run check-types && node esbuild.js && npm run build:webview",
+    "build": "npm run compile",
+    "dev": "npm run compile && npm-run-all -p watch:*",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && node esbuild.js --production && npm run build:webview",
+    "check-types": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.13",
+    "@types/vscode": "^1.100.0",
+    "esbuild": "^0.27.2",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.3"
+  }
+}

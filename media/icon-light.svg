@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="24" height="24"
+     viewBox="0 0 24 24"
+     stroke="#424242"
+     stroke-width="2"
+     stroke-linecap="round"
+     stroke-linejoin="round">
+
+  <!-- Bottom layer -->
+  <ellipse cx="12" cy="18" rx="8" ry="2.5"
+           fill="white" />
+
+  <!-- Layer 3 -->
+  <ellipse cx="12" cy="14" rx="8" ry="2.5"
+           fill="white" />
+
+  <!-- Layer 2 -->
+  <ellipse cx="12" cy="10" rx="8" ry="2.5"
+           fill="white" />
+
+  <!-- Top layer -->
+  <ellipse cx="12" cy="6" rx="8" ry="2.5"
+           fill="#424242" />
+
+</svg>
