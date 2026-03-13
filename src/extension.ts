@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { SliceGraphPanel } from './panel/sliceGraphPanel.js';
 import { SliceTreeSidebar, type SliceFileItem } from './sidebar/sliceTreeSidebar.js';
-import { openClaudeCode, disposeAllTerminals } from './terminal/terminal.js';
+import { toggleClaudeCode, launchAgentTeam, disposeAllTerminals } from './terminal/terminal.js';
 
 let graphPanel: SliceGraphPanel | undefined;
 let treeProvider: SliceTreeSidebar | undefined;
@@ -27,8 +27,41 @@ export function activate(context: vscode.ExtensionContext) {
 			const files = buildFileTree(absPath);
 			treeProvider?.setSlice(sliceName, files);
 		}
+	});
 
-		openClaudeCode(sliceName);
+	graphPanel.onClaudeRequested((sliceName) => {
+		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		let sliceAbsPath: string | undefined;
+		if (workspaceRoot) {
+			const slicePath = resolveSlicePath(workspaceRoot, sliceName);
+			if (slicePath) {
+				sliceAbsPath = path.join(workspaceRoot, slicePath);
+			}
+		}
+		const active = toggleClaudeCode(sliceName, sliceAbsPath);
+		graphPanel?.send({ type: 'claudeState', slice: sliceName, active });
+		// Re-send project state when Claude is closed so the graph picks up file changes
+		if (!active) {
+			graphPanel?.refresh();
+		}
+	});
+
+	graphPanel.onTeamLaunched((slicePaths) => {
+		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		if (!workspaceRoot) return;
+
+		const resolved = slicePaths
+			.map((slicePath) => {
+				// slicePath is the slice's relative path (e.g. "api/user/auth")
+				// We need to find the slice name from model.json
+				const absPath = path.join(workspaceRoot, slicePath);
+				return { name: slicePath, absPath };
+			})
+			.filter((s) => s.absPath);
+
+		if (resolved.length > 0) {
+			launchAgentTeam(resolved);
+		}
 	});
 
 	context.subscriptions.push(

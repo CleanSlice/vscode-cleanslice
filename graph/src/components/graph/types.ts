@@ -13,6 +13,11 @@ export interface SliceInfo {
   parent: string | null
   subsliceCount: number
   app: string
+  domainCount: number
+  dataCount: number
+  viewCount: number
+  hasReadme: boolean
+  hasRepositoryFile: boolean
 }
 
 export interface EdgeInfo {

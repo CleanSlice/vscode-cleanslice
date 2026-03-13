@@ -10,6 +10,7 @@ import * as path from 'path';
 import { execFile } from 'child_process';
 import * as vscode from 'vscode';
 import type { WebviewMessage, ExtensionMessage, SliceInfo, EdgeInfo, AppInfo } from '../types.js';
+import { getActiveClaudeSlices } from '../terminal/terminal.js';
 
 /** Shape of the parsed model.json (subset we care about). */
 interface ModelJson {
@@ -22,6 +23,8 @@ export class SliceGraphPanel {
 	private panel: vscode.WebviewPanel | undefined;
 	private disposables: vscode.Disposable[] = [];
 	private onNodeSelected: ((slice: string) => void) | undefined;
+	private onOpenClaude: ((slice: string) => void) | undefined;
+	private onLaunchTeam: ((slices: string[]) => void) | undefined;
 
 	private constructor(private readonly extensionUri: vscode.Uri) {}
 
@@ -43,6 +46,16 @@ export class SliceGraphPanel {
 	/** Register a callback for when the user clicks a slice node in the graph. */
 	onSliceSelected(handler: (slice: string) => void): void {
 		this.onNodeSelected = handler;
+	}
+
+	/** Register a callback for when the user clicks the Claude icon on a slice. */
+	onClaudeRequested(handler: (slice: string) => void): void {
+		this.onOpenClaude = handler;
+	}
+
+	/** Register a callback for when the user launches an agent team. */
+	onTeamLaunched(handler: (slices: string[]) => void): void {
+		this.onLaunchTeam = handler;
 	}
 
 	/** Create a new panel or reveal the existing one. */
@@ -102,6 +115,11 @@ export class SliceGraphPanel {
 		this.panel?.webview.postMessage(message);
 	}
 
+	/** Re-send the current project state to the webview. */
+	refresh(): void {
+		this.sendProjectState();
+	}
+
 	/** Tear down the panel and release all resources. */
 	dispose(): void {
 		this.panel?.dispose();
@@ -123,6 +141,9 @@ export class SliceGraphPanel {
 			case 'nodeSelected':
 				this.onNodeSelected?.(message.slice);
 				break;
+			case 'openClaude':
+				this.onOpenClaude?.(message.slice);
+				break;
 			case 'openFile':
 				this.openFile(message.path);
 				break;
@@ -131,6 +152,9 @@ export class SliceGraphPanel {
 				break;
 			case 'refresh':
 				this.runSync();
+				break;
+			case 'launchTeam':
+				this.onLaunchTeam?.(message.slices);
 				break;
 		}
 	}
@@ -154,15 +178,30 @@ export class SliceGraphPanel {
 
 		this.send({ type: 'projectState', initialized: true });
 
-		const slices: SliceInfo[] = Object.values(model.slices).map((s) => ({
-			name: s.name,
-			path: s.path,
-			fileCount: s.files.length,
-			type: s.type ?? (s.path.includes('setup') ? 'setup' as const : 'feature' as const),
-			parent: s.parent ?? null,
-			subsliceCount: s.subslices?.length ?? 0,
-			app: s.path.split('/')[0] ?? 'unknown',
-		}));
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+		const slices: SliceInfo[] = Object.values(model.slices).map((s) => {
+			const slicePath = s.path + '/';
+			return {
+				name: s.name,
+				path: s.path,
+				fileCount: s.files.length,
+				type: s.type ?? (s.path.includes('setup') ? 'setup' as const : 'feature' as const),
+				parent: s.parent ?? null,
+				subsliceCount: s.subslices?.length ?? 0,
+				app: s.path.split('/')[0] ?? 'unknown',
+				domainCount: s.files.filter((f) => f.startsWith(slicePath + 'domain/')).length,
+				dataCount: s.files.filter((f) => f.startsWith(slicePath + 'data/')).length,
+				viewCount: s.files.filter((f) => {
+					const rel = f.slice(slicePath.length);
+					return !rel.startsWith('domain/') && !rel.startsWith('data/') && rel.includes('/');
+				}).length,
+				hasReadme: fs.existsSync(path.join(root, s.path, 'README.md')),
+				hasRepositoryFile: s.files.some((f) => {
+					const name = f.split('/').pop() ?? '';
+					return name === 'repository.ts' || name.endsWith('.repository.ts');
+				}),
+			};
+		});
 
 		const edges: EdgeInfo[] = model.edges.map((e) => ({
 			from: e.from,
@@ -187,6 +226,11 @@ export class SliceGraphPanel {
 		}));
 
 		this.send({ type: 'modelData', apps, slices, edges });
+
+		// Restore claude active state for any open terminals
+		for (const sliceName of getActiveClaudeSlices()) {
+			this.send({ type: 'claudeState', slice: sliceName, active: true });
+		}
 	}
 
 	/** Read and parse .cleanslice/model.json, or return null. */
